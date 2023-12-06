@@ -1213,6 +1213,55 @@ class LlamaConverter(SpmConverter):
         return None
 
 
+class YiConverter(SpmConverter):
+    handle_byte_fallback = True
+
+    def decoder(self, replacement, add_prefix_space):
+        return decoders.Sequence(
+            [
+                decoders.Replace("▁", " "),
+                decoders.ByteFallback(),
+                decoders.Fuse(),
+            ]
+        )
+
+    def tokenizer(self, proto):
+        model_type = proto.trainer_spec.model_type
+        vocab_scores = self.vocab(proto)
+        if model_type == 1:
+            import tokenizers
+
+            if version.parse(tokenizers.__version__) < version.parse("0.14.0"):
+                tokenizer = Tokenizer(Unigram(vocab_scores, 0))
+            else:
+                tokenizer = Tokenizer(Unigram(vocab_scores, 0, byte_fallback=True))
+
+        elif model_type == 2:
+            _, merges = SentencePieceExtractor(self.original_tokenizer.vocab_file).extract(vocab_scores)
+            bpe_vocab = {word: i for i, (word, _score) in enumerate(vocab_scores)}
+            tokenizer = Tokenizer(
+                BPE(bpe_vocab, merges, unk_token=proto.trainer_spec.unk_piece, fuse_unk=True, byte_fallback=True)
+            )
+            tokenizer.add_special_tokens(
+                [
+                    AddedToken("<unk>", normalized=False, special=True),
+                    AddedToken("<|startoftext|>", normalized=False, special=True),
+                    AddedToken("<|endoftext|>", normalized=False, special=True),
+                ]
+            )
+        else:
+            raise Exception(
+                "You're trying to run a `Unigram` model but you're file was trained with a different algorithm"
+            )
+
+        return tokenizer
+
+    def normalizer(self, proto):
+        return normalizers.Sequence([normalizers.Replace(pattern=" ", content="▁")])
+
+    def pre_tokenizer(self, replacement, add_prefix_space):
+        return None
+        
 class MarkupLMConverter(Converter):
     def converted(self) -> Tokenizer:
         ot = self.original_tokenizer
@@ -1305,6 +1354,7 @@ SLOW_TO_FAST_CONVERTERS = {
     "XGLMTokenizer": XGLMConverter,
     "LlamaTokenizer": LlamaConverter,
     "CodeLlamaTokenizer": LlamaConverter,
+    "YiConverter": YiConverter
 }
 
 
